@@ -84,15 +84,42 @@ export async function POST(request: NextRequest) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
     const startTime = Date.now();
+    const requestBody = JSON.stringify(geminiBody);
+
+    // Check request size (Vercel limit ~4.5MB, Gemini limit ~20MB)
+    const requestSizeMB = new Blob([requestBody]).size / (1024 * 1024);
+    if (requestSizeMB > 4) {
+      return NextResponse.json(
+        {
+          error: `요청 크기가 너무 큽니다 (${requestSizeMB.toFixed(1)}MB). 캐릭터 이미지를 더 작은 파일로 교체해주세요.`,
+          elapsed: "0",
+        },
+        { status: 413 }
+      );
+    }
 
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(geminiBody),
+      body: requestBody,
     });
 
-    const data = await response.json();
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+    // Safe JSON parsing — API가 JSON이 아닌 텍스트를 반환할 수 있음
+    const rawText = await response.text();
+    let data: any;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      return NextResponse.json(
+        {
+          error: `Gemini API 오류 (HTTP ${response.status}): ${rawText.slice(0, 200)}`,
+          elapsed,
+        },
+        { status: response.status || 500 }
+      );
+    }
 
     // Handle API errors
     if (data.error) {

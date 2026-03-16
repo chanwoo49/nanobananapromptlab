@@ -103,7 +103,18 @@ export default function Home() {
                 }),
               });
 
-              const data = await res.json();
+              // text로 먼저 받고 JSON 파싱 (Vercel이 HTML/텍스트 에러를 반환할 수 있음)
+              const rawText = await res.text();
+              let data: any;
+              try {
+                data = JSON.parse(rawText);
+              } catch {
+                updateResult(model.id, i, {
+                  status: "error",
+                  error: `서버 오류 (HTTP ${res.status}): ${rawText.slice(0, 100) || "응답 파싱 실패"}`,
+                });
+                return;
+              }
 
               if (!res.ok || data.error) {
                 updateResult(model.id, i, {
