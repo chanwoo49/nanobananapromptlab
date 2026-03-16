@@ -121,12 +121,21 @@ function ImageSlot({
   }
 
   if (result.status === "generating") {
+    const isRetrying = result.text?.includes("재시도");
     return (
       <div className="img-slot rounded-md overflow-hidden relative">
         <div className="skeleton w-full h-full" />
         <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <div className="w-5 h-5 border-2 border-banana-500/30 border-t-banana-500 rounded-full animate-spin mb-1" />
-          <span className="font-mono text-[9px] text-lab-muted">생성 중</span>
+          <div
+            className={`w-5 h-5 border-2 rounded-full animate-spin mb-1 ${
+              isRetrying
+                ? "border-amber-500/30 border-t-amber-500"
+                : "border-banana-500/30 border-t-banana-500"
+            }`}
+          />
+          <span className="font-mono text-[9px] text-lab-muted">
+            {isRetrying ? result.text : "생성 중"}
+          </span>
         </div>
       </div>
     );
