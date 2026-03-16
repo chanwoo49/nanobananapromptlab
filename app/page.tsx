@@ -5,9 +5,8 @@ import PromptPanel from "./components/PromptPanel";
 import ResultGrid from "./components/ResultGrid";
 import { MODELS, IMAGES_PER_MODEL, ImageResult } from "./types";
 
-const MAX_RETRIES = 2; // 실패 시 최대 2회 재시도 (총 3회 시도)
-const RETRY_DELAY = 2000; // 재시도 전 대기 시간 (ms)
-const CONCURRENCY = 2; // 동시 실행 수 (Rate Limit 여유)
+const MAX_RETRIES = 2;
+const RETRY_DELAY = 2000;
 
 // 재시도 가능한 오류인지 판별
 function isRetryable(error: string, httpStatus?: number): boolean {
@@ -31,29 +30,6 @@ function createEmptyResults(): ImageResult[] {
       });
     }
   }
-  return results;
-}
-
-async function runWithConcurrency<T>(
-  tasks: (() => Promise<T>)[],
-  concurrency: number
-): Promise<T[]> {
-  const results: T[] = [];
-  const queue = [...tasks];
-  let index = 0;
-
-  const runNext = async (): Promise<void> => {
-    while (index < queue.length) {
-      const currentIndex = index++;
-      results[currentIndex] = await queue[currentIndex]();
-    }
-  };
-
-  const workers = Array.from(
-    { length: Math.min(concurrency, queue.length) },
-    () => runNext()
-  );
-  await Promise.all(workers);
   return results;
 }
 
@@ -154,58 +130,61 @@ export default function Home() {
         : prompt;
       setDevPrompt(displayPrompt);
 
-      const tasks: (() => Promise<void>)[] = [];
+      // ── 모델별 병렬 실행, 각 모델 내부는 순차 실행 ──
+      // Flash 3.1: ■→■→■→■→■ (빠르게 완료)
+      // Pro:       ■ · → ■ · → ■ · → ...  (느려도 다른 모델에 영향 없음)
+      // Flash 2.5: ■→■→■→■→■
       let completedCount = 0;
 
-      for (const model of MODELS) {
+      const modelWorkers = MODELS.map((model) => async () => {
         for (let i = 0; i < IMAGES_PER_MODEL; i++) {
-          tasks.push(async () => {
-            if (abortRef.current) return;
+          if (abortRef.current) return;
 
-            updateResult(model.id, i, { status: "generating" });
+          updateResult(model.id, i, { status: "generating" });
 
-            const result = await generateSingle(
-              model.id,
-              prompt,
-              characterBase64,
-              // 재시도 상태를 UI에 반영
-              (msg) =>
-                updateResult(model.id, i, {
-                  status: "generating",
-                  text: msg,
-                })
-            );
-
-            if (result.success && result.data) {
+          const result = await generateSingle(
+            model.id,
+            prompt,
+            characterBase64,
+            (msg) =>
               updateResult(model.id, i, {
-                status: "done",
-                imageData: result.data.imageData,
-                mimeType: result.data.mimeType,
-                text: result.data.text,
-                elapsed: result.data.elapsed,
-                finishReason: result.data.finishReason,
-                safetyRatings: result.data.safetyRatings,
-              });
-            } else {
-              updateResult(model.id, i, {
-                status: "error",
-                error: result.error,
-                finishReason: result.data?.finishReason,
-                safetyRatings: result.data?.safetyRatings,
-                elapsed: result.data?.elapsed,
-              });
-            }
+                status: "generating",
+                text: msg,
+              })
+          );
 
-            completedCount++;
-            setProgress({ done: completedCount, total });
+          if (result.success && result.data) {
+            updateResult(model.id, i, {
+              status: "done",
+              imageData: result.data.imageData,
+              mimeType: result.data.mimeType,
+              text: result.data.text,
+              elapsed: result.data.elapsed,
+              finishReason: result.data.finishReason,
+              safetyRatings: result.data.safetyRatings,
+            });
+          } else {
+            updateResult(model.id, i, {
+              status: "error",
+              error: result.error,
+              finishReason: result.data?.finishReason,
+              safetyRatings: result.data?.safetyRatings,
+              elapsed: result.data?.elapsed,
+            });
+          }
 
-            // Rate Limit 배려: 요청 간 간격
+          completedCount++;
+          setProgress({ done: completedCount, total });
+
+          // 같은 모델의 다음 요청 전 간격 (Rate Limit 배려)
+          if (i < IMAGES_PER_MODEL - 1) {
             await new Promise((r) => setTimeout(r, 500));
-          });
+          }
         }
-      }
+      });
 
-      await runWithConcurrency(tasks, CONCURRENCY);
+      // 3개 모델 동시에 시작, 각각 자기 5장을 순차 처리
+      await Promise.all(modelWorkers.map((worker) => worker()));
       setIsGenerating(false);
     },
     [updateResult]
